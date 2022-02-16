@@ -19,6 +19,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -26,32 +27,43 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
 )
 
+var jobname *string
+
 func main() {
 
 	var kubeconfig *string
+	var namespace *string
+
 	if home := homedir.HomeDir(); home != "" {
-		kubeconfig = flag.String("kubeconfig", filepath.Join(home, ".kube", "config"), "(optional) absolute path to the kubeconfig file")
+		kubeconfig = flag.String("kubeconfig", filepath.Join(home, ".kube", "config-chaos"), "(optional) absolute path to the kubeconfig file")
 	} else {
 		kubeconfig = flag.String("kubeconfig", "", "absolute path to the kubeconfig file")
 	}
+	namespace = flag.String("namespace", "default", "which namespace of job")
+	jobname = flag.String("jobname", "", "job name")
+
 	flag.Parse()
+
+	if *jobname == "" {
+		fmt.Println("please set the jobname with --jobname")
+		os.Exit(-1)
+	}
 
 	// use the current context in kubeconfig
 	config, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
 	if err != nil {
-		panic(err.Error())
+		fmt.Printf("use kubeconfig with failed |%s| and try to run with inCluster\n", err.Error())
+		config, err = rest.InClusterConfig()
+		if err != nil {
+			panic(err.Error())
+		}
 	}
-
-	// creates the in-cluster config
-	// config, err := rest.InClusterConfig()
-	// if err != nil {
-	// 	panic(err.Error())
-	// }
 
 	// creates the clientset
 	clientset, err := kubernetes.NewForConfig(config)
@@ -75,25 +87,17 @@ func main() {
 	informerFactory.Start(stopper)
 	informerFactory.WaitForCacheSync(stopper)
 
-	jobs, err := jobLister.Jobs("default").List(labels.Everything())
+	jobs, err := jobLister.Jobs(*namespace).List(labels.Everything())
 	if err != nil {
 		panic(err)
 	}
 
-	go func(jobss []*v1.Job, cc chan struct{}) {
-		time.Sleep(time.Second * 2)
-		fmt.Println("begin send stop")
-		cc <- struct{}{}
-		// for idx, job := range jobss {
-		// 	fmt.Printf("%d -> %s\n", idx+1, job.Name)
-		// 	checkStatus(job)
-		// 	cc <- struct{}{}
-		// }
-	}(jobs, stopper)
+	fmt.Printf("wating the job:'%s' complete...\n", *jobname)
+	for _, job := range jobs {
+		checkStatus(job)
+	}
 
-	fmt.Println("begin listener stopper")
-	abb := <-stopper
-	fmt.Println("receive:", abb)
+	<-stopper
 }
 
 func onAdd(obj interface{}) {
@@ -103,16 +107,18 @@ func onDelete(obj interface{}) {
 }
 
 func onUpdate(old, new interface{}) {
-	// oldDeploy := old.(*v1.Job)
 	newStatusJob := new.(*v1.Job)
 	fmt.Println("update job:", newStatusJob.Name, newStatusJob.Name)
 	checkStatus(newStatusJob)
 }
 
 func checkStatus(newStatusJob *v1.Job) {
-	fmt.Println(newStatusJob.Status.Succeeded)
-	if newStatusJob.Status.Succeeded > 0 {
-		fmt.Println("begin stoper application")
-		// stopper <- struct{}{}
+	if &newStatusJob.Name == jobname {
+		if newStatusJob.Status.Succeeded > 0 {
+			fmt.Printf("job:%s is completed!\n", newStatusJob.Name)
+			os.Exit(1)
+		} else {
+			fmt.Printf("wating for the job:%s,current status:%s\n", newStatusJob.Name, &newStatusJob.Status)
+		}
 	}
 }
