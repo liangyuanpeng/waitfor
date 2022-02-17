@@ -1,2 +1,5 @@
+
 # waitfor
-Waitfor job Completed of init container
+Waiting for job Completed of init container  [中文](README_zh.md)
+
+

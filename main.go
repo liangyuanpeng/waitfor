@@ -41,7 +41,7 @@ func main() {
 	var namespace *string
 
 	if home := homedir.HomeDir(); home != "" {
-		kubeconfig = flag.String("kubeconfig", filepath.Join(home, ".kube", "config-chaos"), "(optional) absolute path to the kubeconfig file")
+		kubeconfig = flag.String("kubeconfig", filepath.Join(home, ".kube", "config"), "(optional) absolute path to the kubeconfig file")
 	} else {
 		kubeconfig = flag.String("kubeconfig", "", "absolute path to the kubeconfig file")
 	}
@@ -108,17 +108,17 @@ func onDelete(obj interface{}) {
 
 func onUpdate(old, new interface{}) {
 	newStatusJob := new.(*v1.Job)
-	fmt.Println("update job:", newStatusJob.Name, newStatusJob.Name)
+	// fmt.Println("update job:", newStatusJob.Name, newStatusJob.Name)
 	checkStatus(newStatusJob)
 }
 
 func checkStatus(newStatusJob *v1.Job) {
-	if &newStatusJob.Name == jobname {
+	if newStatusJob.Name == *jobname {
 		if newStatusJob.Status.Succeeded > 0 {
 			fmt.Printf("job:%s is completed!\n", newStatusJob.Name)
-			os.Exit(1)
+			os.Exit(0)
 		} else {
-			fmt.Printf("wating for the job:%s,current status:%s\n", newStatusJob.Name, &newStatusJob.Status)
+			fmt.Printf("wating for the job:%s,current status:%s\n", newStatusJob.Name, newStatusJob.Status.String())
 		}
 	}
 }
