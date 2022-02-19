@@ -35,6 +35,8 @@ import (
 
 var jobname *string
 
+var stopper = make(chan struct{})
+
 func main() {
 
 	var kubeconfig *string
@@ -81,9 +83,6 @@ func main() {
 		DeleteFunc: onDelete,
 	})
 
-	stopper := make(chan struct{})
-	defer close(stopper)
-
 	informerFactory.Start(stopper)
 	informerFactory.WaitForCacheSync(stopper)
 
@@ -116,7 +115,7 @@ func checkStatus(newStatusJob *v1.Job) {
 	if newStatusJob.Name == *jobname {
 		if newStatusJob.Status.Succeeded > 0 {
 			fmt.Printf("job:%s is completed!\n", newStatusJob.Name)
-			os.Exit(0)
+			close(stopper)
 		} else {
 			fmt.Printf("wating for the job:%s,current status:%s\n", newStatusJob.Name, newStatusJob.Status.String())
 		}
