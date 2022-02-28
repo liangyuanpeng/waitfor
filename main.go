@@ -24,6 +24,7 @@ import (
 	"time"
 
 	v1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
@@ -34,13 +35,15 @@ import (
 )
 
 var jobname *string
+var secretname *string
+
+var namespace *string
 
 var stopper = make(chan struct{})
 
 func main() {
 
 	var kubeconfig *string
-	var namespace *string
 
 	if home := homedir.HomeDir(); home != "" {
 		kubeconfig = flag.String("kubeconfig", filepath.Join(home, ".kube", "config"), "(optional) absolute path to the kubeconfig file")
@@ -49,11 +52,12 @@ func main() {
 	}
 	namespace = flag.String("namespace", "default", "which namespace of job")
 	jobname = flag.String("jobname", "", "job name")
+	secretname = flag.String("secret", "", "secret name")
 
 	flag.Parse()
 
-	if *jobname == "" {
-		fmt.Println("please set the jobname with --jobname")
+	if *jobname == "" && *secretname == "" {
+		fmt.Println("please set the jobname with --jobname or set the secretname with --secret")
 		os.Exit(-1)
 	}
 
@@ -73,7 +77,45 @@ func main() {
 		panic(err.Error())
 	}
 
-	informerFactory := informers.NewSharedInformerFactory(clientset, time.Second*60)
+	runListenerForJob(clientset, stopper)
+	runListenerForSecret(clientset, stopper)
+
+	<-stopper
+}
+
+func runListenerForSecret(client *kubernetes.Clientset, c chan struct{}) {
+	if *secretname == "" {
+		return
+	}
+	informerFactory := informers.NewSharedInformerFactory(client, time.Second*10)
+	secretInformer := informerFactory.Core().V1().Secrets()
+	informer := secretInformer.Informer()
+	secretLister := secretInformer.Lister()
+	informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc:    onAdd,
+		UpdateFunc: onUpdateForSecret,
+		DeleteFunc: onDelete,
+	})
+
+	informerFactory.Start(stopper)
+	informerFactory.WaitForCacheSync(stopper)
+
+	secrets, err := secretLister.Secrets(*namespace).List(labels.Everything())
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Printf("Wating the secret:'%s' create...\n", *secretname)
+	for _, s := range secrets {
+		checkStatusForSecret(s)
+	}
+}
+
+func runListenerForJob(client *kubernetes.Clientset, c chan struct{}) {
+	if *jobname == "" {
+		return
+	}
+	informerFactory := informers.NewSharedInformerFactory(client, time.Second*30)
 	jobInformer := informerFactory.Batch().V1().Jobs()
 	informer := jobInformer.Informer()
 	jobLister := jobInformer.Lister()
@@ -91,12 +133,10 @@ func main() {
 		panic(err)
 	}
 
-	fmt.Printf("wating the job:'%s' complete...\n", *jobname)
+	fmt.Printf("Wating the job:'%s' complete...\n", *jobname)
 	for _, job := range jobs {
 		checkStatus(job)
 	}
-
-	<-stopper
 }
 
 func onAdd(obj interface{}) {
@@ -109,6 +149,19 @@ func onUpdate(old, new interface{}) {
 	newStatusJob := new.(*v1.Job)
 	// fmt.Println("update job:", newStatusJob.Name, newStatusJob.Name)
 	checkStatus(newStatusJob)
+}
+
+func onUpdateForSecret(old, new interface{}) {
+	newStatusSecret := new.(*corev1.Secret)
+	// fmt.Println("update secret:", newStatusSecret.Name, newStatusSecret.Name)
+	checkStatusForSecret(newStatusSecret)
+}
+
+func checkStatusForSecret(newStatusSecret *corev1.Secret) {
+	if newStatusSecret.Name == *secretname {
+		fmt.Printf("The secret:'%s' is created,exiting...\n", *secretname)
+		close(stopper)
+	}
 }
 
 func checkStatus(newStatusJob *v1.Job) {
